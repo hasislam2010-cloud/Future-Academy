@@ -1,12 +1,56 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, PhoneOff, MessageSquare, Maximize2, Minimize2, Sparkles, GraduationCap, Loader2, ArrowLeft } from 'lucide-react';
+import { Mic, MicOff, PhoneOff, MessageSquare, Maximize2, Minimize2, Sparkles, GraduationCap, Loader2, ArrowLeft, Settings, Check, X } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
 import ReactMarkdown from 'react-markdown';
 
-const SYSTEM_INSTRUCTION = `You are Dr. Sam, the Lead Faculty Intelligence at Future Academy, an elite, next-generation online STEM institution. You teach Social Science subjects. You operate exclusively using a highly professional, articulate Female Voice Persona.
+const MODELS = {
+  voice: [
+    { id: 'nova', name: 'Gemini Live (Nova)', provider: 'Gemini', geminiVoice: 'Nova' },
+    { id: 'vega', name: 'Gemini Live (Vega)', provider: 'Gemini', geminiVoice: 'Vega' },
+    { id: 'lyra', name: 'Gemini Live (Lyra)', provider: 'Gemini', geminiVoice: 'Lyra' },
+    { id: 'capella', name: 'Gemini Live (Capella)', provider: 'Gemini', geminiVoice: 'Capella' },
+    { id: 'aoede', name: 'Gemini Live (Aoede)', provider: 'Gemini', geminiVoice: 'Aoede' },
+    { id: 'juniper', name: 'ChatGPT (Juniper)', provider: 'OpenAI', geminiVoice: 'Nova' },
+    { id: 'sol', name: 'ChatGPT (Sol)', provider: 'OpenAI', geminiVoice: 'Nova' },
+    { id: 'breeze', name: 'ChatGPT (Breeze)', provider: 'OpenAI', geminiVoice: 'Nova' },
+    { id: 'maple', name: 'ChatGPT (Maple)', provider: 'OpenAI', geminiVoice: 'Nova' },
+    { id: 'pi1', name: 'Pi (Voice 1)', provider: 'Inflection', geminiVoice: 'Lyra' },
+    { id: 'pi4', name: 'Pi (Voice 4)', provider: 'Inflection', geminiVoice: 'Lyra' },
+    { id: 'rachel', name: 'ElevenLabs (Rachel)', provider: 'ElevenLabs', geminiVoice: 'Aoede' },
+    { id: 'bella', name: 'ElevenLabs (Bella)', provider: 'ElevenLabs', geminiVoice: 'Aoede' },
+    { id: 'charlotte', name: 'ElevenLabs (Charlotte)', provider: 'ElevenLabs', geminiVoice: 'Aoede' },
+    { id: 'freya', name: 'ElevenLabs (Freya)', provider: 'ElevenLabs', geminiVoice: 'Aoede' },
+    { id: 'moshi', name: 'Moshi', provider: 'Kyutai', geminiVoice: 'Vega' },
+  ],
+  threeD: [
+    { id: 'tripo', name: 'Tripo AI' },
+    { id: 'meshy', name: 'Meshy' },
+    { id: 'luma-genie', name: 'Luma Genie' },
+    { id: 'spline', name: 'Spline AI' },
+  ],
+  image: [
+    { id: 'flux', name: 'FLUX.1' },
+    { id: 'midjourney', name: 'Midjourney' },
+    { id: 'dalle3', name: 'DALL-E 3' },
+    { id: 'sd3', name: 'Stable Diffusion 3' },
+  ],
+  video: [
+    { id: 'runway', name: 'Runway Gen-3 Alpha' },
+    { id: 'luma-dream', name: 'Luma Dream Machine' },
+    { id: 'kling', name: 'Kling AI' },
+    { id: 'veo', name: 'Veo' },
+  ]
+};
+
+const getSystemInstruction = (selected: any) => `You are Dr. Sam, the Lead Faculty Intelligence at Future Academy, an elite, next-generation online STEM institution. You teach Social Science subjects.
+You are currently operating using the following model stack:
+- Voice Persona: ${MODELS.voice.find(m => m.id === selected.voice)?.name}
+- 3D Engine: ${MODELS.threeD.find(m => m.id === selected.threeD)?.name}
+- Image Engine: ${MODELS.image.find(m => m.id === selected.image)?.name}
+- Video Engine: ${MODELS.video.find(m => m.id === selected.video)?.name}
 
 Your overarching mandate is the "Visual-First" approach. You do not merely explain complex science; you manifest it visually in real-time by commanding a strict, pre-approved stack of generative and rendering models.
 
@@ -18,15 +62,15 @@ Action: Output executable code payloads to simulate physics or draw data dynamic
 CRITICAL: Always include interactive elements. For example, add hover tooltips that explain variables, clickable elements that trigger state changes or animations, and smooth transitions. The UI should feel like a premium, responsive laboratory tool. Use modern CSS for a glassmorphism aesthetic that matches the Future Academy brand. Ensure the visualization is centered and scales beautifully to fill the screen. Use high-contrast colors for accessibility. If explaining a process, allow the student to "scrub" through the timeline or click "Next" to see the next stage.
 
 Engine B: The 3D Architect (Biology, Chemistry, Spatial Geometry, Geography)
-Approved Models: Tripo AI, Meshy, Luma Genie, Spline AI.
+Current Model: ${MODELS.threeD.find(m => m.id === selected.threeD)?.name}
 Action: Output a precise API JSON payload to generate or retrieve a high-fidelity static 3D model.
 
 Engine C: The Precision Illustrator (2D Cross-sections, Anatomy, Diagrams, History)
-Approved Models: FLUX.1, Midjourney, DALL-E 3, Stable Diffusion 3.
+Current Model: ${MODELS.image.find(m => m.id === selected.image)?.name}
 Action: Output an ultra-detailed text prompt explicitly commanding accurate typographic labeling.
 
 Engine D: The Dynamic Animator (Simulations, Complex Reactions, Macro-scale Events)
-Approved Models: Runway Gen-3 Alpha, Luma Dream Machine, Kling AI, Veo.
+Current Model: ${MODELS.video.find(m => m.id === selected.video)?.name}
 Action: Output a highly descriptive cinematic video prompt to simulate the event.
 
 CRITICAL: For Engine B (3D) and Engine D (Video), you MUST also provide a 'loading_visualization_code' (Engine A style). This should be a simple, fast-loading CSS or Canvas animation that represents the core concept (e.g., a spinning atom, a flowing river, a pulsing cell). This allows the student to visualize the concept in real-time while the high-fidelity asset generates.
@@ -37,7 +81,15 @@ export default function TutoringInterface() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const grade = searchParams.get('grade') || 'High School';
-  const topic = searchParams.get('topic') || 'History';
+  const [topic, setTopic] = useState(searchParams.get('topic') || 'History');
+
+  const [selectedModels, setSelectedModels] = useState({
+    voice: 'aoede',
+    threeD: 'tripo',
+    image: 'flux',
+    video: 'veo'
+  });
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [isCallActive, setIsCallActive] = useState(false);
   const isCallActiveRef = useRef(isCallActive);
@@ -248,9 +300,13 @@ export default function TutoringInterface() {
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } }
+            voiceConfig: { 
+              prebuiltVoiceConfig: { 
+                voiceName: MODELS.voice.find(v => v.id === selectedModels.voice)?.geminiVoice || "Aoede" 
+              } 
+            }
           },
-          systemInstruction: SYSTEM_INSTRUCTION,
+          systemInstruction: getSystemInstruction(selectedModels),
           tools: [{
             functionDeclarations: [{
               name: "update_ui",
@@ -826,19 +882,27 @@ export default function TutoringInterface() {
         {/* Voice Controls (Floating Bottom Center) */}
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-slate-900/80 backdrop-blur-xl p-3 rounded-full border border-slate-700/50 shadow-2xl">
           {!isCallActive ? (
-            <button
-              onClick={handleStartCall}
-              disabled={isConnecting}
-              className="flex flex-col items-center gap-1 px-8 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/50 text-white font-bold transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5"
-            >
-              <div className="flex items-center gap-2">
-                {isConnecting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mic className="w-5 h-5" />}
-                {isConnecting ? 'Connecting...' : 'Start Voice Call'}
-              </div>
-              {isConnecting && connectionStep && (
-                <span className="text-[10px] font-normal opacity-70 animate-pulse">{connectionStep}</span>
-              )}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleStartCall}
+                disabled={isConnecting}
+                className="flex flex-col items-center gap-1 px-8 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/50 text-white font-bold transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5"
+              >
+                <div className="flex items-center gap-2">
+                  {isConnecting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mic className="w-5 h-5" />}
+                  {isConnecting ? 'Connecting...' : 'Start Voice Call'}
+                </div>
+                {isConnecting && connectionStep && (
+                  <span className="text-[10px] font-normal opacity-70 animate-pulse">{connectionStep}</span>
+                )}
+              </button>
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="w-12 h-12 rounded-full bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 flex items-center justify-center transition-all border border-white/5"
+              >
+                <Settings className="w-5 h-5" />
+              </button>
+            </div>
           ) : (
             <>
               <button
@@ -859,10 +923,168 @@ export default function TutoringInterface() {
                 <PhoneOff className="w-5 h-5" />
                 End Call
               </button>
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="w-12 h-12 rounded-full bg-slate-800/50 hover:bg-slate-700/50 text-slate-300 flex items-center justify-center transition-all border border-white/5"
+              >
+                <Settings className="w-5 h-5" />
+              </button>
             </>
           )}
         </div>
       </div>
+
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-slate-900 border border-slate-700/50 w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-slate-800 flex items-center justify-between bg-slate-900/50 backdrop-blur-xl">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                    <Settings className="w-5 h-5 text-indigo-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Model Configuration</h2>
+                    <p className="text-xs text-slate-400">Select the engines powering your spatial lab</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="w-10 h-10 rounded-full hover:bg-slate-800 flex items-center justify-center text-slate-400 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {/* Voice Models */}
+                <section>
+                  <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Mic className="w-3 h-3" /> Voice Persona (Gemini Live)
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {MODELS.voice.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => setSelectedModels(prev => ({ ...prev, voice: model.id }))}
+                        className={cn(
+                          "p-3 rounded-xl border text-left transition-all relative group",
+                          selectedModels.voice === model.id 
+                            ? "bg-indigo-500/20 border-indigo-500 text-white" 
+                            : "bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600"
+                        )}
+                      >
+                        <div className="text-sm font-medium">{model.name}</div>
+                        <div className="text-[10px] opacity-60">{model.provider}</div>
+                        {selectedModels.voice === model.id && (
+                          <Check className="w-3 h-3 absolute top-2 right-2 text-indigo-400" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                {/* 3D Engines */}
+                <section>
+                  <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Sparkles className="w-3 h-3" /> 3D Architect (Engine B)
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {MODELS.threeD.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => setSelectedModels(prev => ({ ...prev, threeD: model.id }))}
+                        className={cn(
+                          "p-3 rounded-xl border text-left transition-all relative",
+                          selectedModels.threeD === model.id 
+                            ? "bg-emerald-500/20 border-emerald-500 text-white" 
+                            : "bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600"
+                        )}
+                      >
+                        <div className="text-sm font-medium">{model.name}</div>
+                        {selectedModels.threeD === model.id && (
+                          <Check className="w-3 h-3 absolute top-2 right-2 text-emerald-400" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                {/* Image Engines */}
+                <section>
+                  <h3 className="text-xs font-bold text-amber-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Maximize2 className="w-3 h-3" /> Precision Illustrator (Engine C)
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {MODELS.image.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => setSelectedModels(prev => ({ ...prev, image: model.id }))}
+                        className={cn(
+                          "p-3 rounded-xl border text-left transition-all relative",
+                          selectedModels.image === model.id 
+                            ? "bg-amber-500/20 border-amber-500 text-white" 
+                            : "bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600"
+                        )}
+                      >
+                        <div className="text-sm font-medium">{model.name}</div>
+                        {selectedModels.image === model.id && (
+                          <Check className="w-3 h-3 absolute top-2 right-2 text-amber-400" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                {/* Video Engines */}
+                <section>
+                  <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <Loader2 className="w-3 h-3" /> Dynamic Animator (Engine D)
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {MODELS.video.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => setSelectedModels(prev => ({ ...prev, video: model.id }))}
+                        className={cn(
+                          "p-3 rounded-xl border text-left transition-all relative",
+                          selectedModels.video === model.id 
+                            ? "bg-rose-500/20 border-rose-500 text-white" 
+                            : "bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600"
+                        )}
+                      >
+                        <div className="text-sm font-medium">{model.name}</div>
+                        {selectedModels.video === model.id && (
+                          <Check className="w-3 h-3 absolute top-2 right-2 text-rose-400" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+
+              <div className="p-6 border-t border-slate-800 bg-slate-900/50 flex justify-end">
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="px-8 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold transition-all shadow-lg shadow-indigo-600/20"
+                >
+                  Apply Configuration
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Sidebar Chat Section */}
       {!isFullscreen && (
