@@ -69,6 +69,24 @@ export default function TutoringInterface() {
   }, [messages]);
 
   useEffect(() => {
+    // Monkey-patch WebSocket.send to permanently suppress "CLOSING or CLOSED" errors
+    // This is the most robust way to handle libraries that don't catch their own teardown errors.
+    const originalSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function(...args) {
+      if (this.readyState === WebSocket.CLOSING || this.readyState === WebSocket.CLOSED) {
+        return; // Silently ignore
+      }
+      try {
+        return originalSend.apply(this, args);
+      } catch (e: any) {
+        const errStr = String(e?.message || e).toLowerCase();
+        if (errStr.includes('closing') || errStr.includes('closed')) {
+          return; // Ignore
+        }
+        throw e;
+      }
+    };
+
     const handleGlobalError = (event: ErrorEvent) => {
       const errorStr = (event.error instanceof Error ? event.error.message : String(event.message || event.error)).toLowerCase();
       if (errorStr.includes('websocket') && (errorStr.includes('closing') || errorStr.includes('closed'))) {
@@ -103,6 +121,7 @@ export default function TutoringInterface() {
       window.removeEventListener('error', handleGlobalError, true);
       window.removeEventListener('unhandledrejection', handleUnhandledRejection, true);
       window.onerror = originalOnError;
+      WebSocket.prototype.send = originalSend; // Restore on unmount
     };
   }, []);
 
