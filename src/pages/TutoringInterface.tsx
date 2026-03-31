@@ -90,7 +90,11 @@ export default function TutoringInterface() {
     video: 'veo'
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [errorInfo, setErrorInfo] = useState<{ type: 'permission' | 'quota' | 'other', message: string } | null>(null);
+  const [errorInfo, setErrorInfo] = useState<{ 
+    type: 'permission' | 'quota' | 'other', 
+    message: string,
+    onRetry?: () => void
+  } | null>(null);
 
   const [isCallActive, setIsCallActive] = useState(false);
   const isCallActiveRef = useRef(isCallActive);
@@ -127,6 +131,8 @@ export default function TutoringInterface() {
   const activeSessionRef = useRef<any>(null);
   const isClosingRef = useRef(false);
   const aiRef = useRef<GoogleGenAI | null>(null);
+  const apiKeyRef = useRef<string>("");
+  const lastVisualArgsRef = useRef<any>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
 
@@ -238,6 +244,7 @@ export default function TutoringInterface() {
       }
       
       setConnectionStep("Setting up Audio...");
+      apiKeyRef.current = apiKey;
       aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
       
       // Setup Audio Context for playback
@@ -461,6 +468,7 @@ export default function TutoringInterface() {
                 let url = '';
                 
                 if (args.ui_action === 'ENGINE_C_IMAGE' || args.ui_action === 'ENGINE_B_3D' || args.ui_action === 'ENGINE_D_VIDEO') {
+                  lastVisualArgsRef.current = args;
                   if (args.ui_action === 'ENGINE_C_IMAGE') visualType = 'image';
                   else if (args.ui_action === 'ENGINE_B_3D') visualType = '3d';
                   else if (args.ui_action === 'ENGINE_D_VIDEO') visualType = 'video';
@@ -495,14 +503,22 @@ export default function TutoringInterface() {
                       }).catch(err => {
                         console.error("Image generation failed:", err);
                         const errStr = JSON.stringify(err).toLowerCase();
-                        if (errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota")) {
-                          if (retryCount < 2) {
-                            console.log(`Retrying image generation (attempt ${retryCount + 1})...`);
-                            setTimeout(() => generateImage(retryCount + 1), 2000);
+                        const isQuota = errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota");
+                        const isPermission = errStr.includes("403") || errStr.includes("permission_denied");
+
+                        if (isQuota) {
+                          if (retryCount < 3) {
+                            const delay = Math.pow(2, retryCount) * 2000;
+                            console.log(`Retrying image generation (attempt ${retryCount + 1}) in ${delay}ms...`);
+                            setTimeout(() => generateImage(retryCount + 1), delay);
                           } else {
-                            setErrorInfo({ type: 'quota', message: "Image generation quota exceeded. Using placeholder visuals." });
+                            setErrorInfo({ 
+                              type: 'quota', 
+                              message: "Image generation quota exceeded. Using placeholder visuals.",
+                              onRetry: () => generateImage(0)
+                            });
                           }
-                        } else if (errStr.includes("403") || errStr.includes("permission_denied")) {
+                        } else if (isPermission) {
                           setErrorInfo({ type: 'permission', message: "Permission denied for image generation. Please re-select your API key." });
                         }
                       });
@@ -531,8 +547,8 @@ export default function TutoringInterface() {
                           
                           const downloadLink = op.response?.generatedVideos?.[0]?.video?.uri;
                           if (downloadLink) {
-                            // Get API key from the instance if possible, or fallback to env
-                            const currentKey = (currentAi as any).apiKey || process.env.API_KEY || process.env.GEMINI_API_KEY;
+                            // Use the stored API key for the fetch call
+                            const currentKey = apiKeyRef.current || process.env.API_KEY || process.env.GEMINI_API_KEY;
                             const videoResponse = await fetch(downloadLink, {
                               method: 'GET',
                               headers: { 'x-goog-api-key': currentKey as string },
@@ -548,14 +564,22 @@ export default function TutoringInterface() {
                         }).catch(err => {
                           console.error("Video generation failed:", err);
                           const errStr = JSON.stringify(err).toLowerCase();
-                          if (errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota")) {
-                            if (retryCount < 1) {
-                              console.log(`Retrying video generation (attempt ${retryCount + 1})...`);
-                              setTimeout(() => generateVideo(retryCount + 1), 3000);
+                          const isQuota = errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota");
+                          const isPermission = errStr.includes("403") || errStr.includes("permission_denied") || errStr.includes("not found");
+
+                          if (isQuota) {
+                            if (retryCount < 2) {
+                              const delay = Math.pow(2, retryCount) * 3000;
+                              console.log(`Retrying video generation (attempt ${retryCount + 1}) in ${delay}ms...`);
+                              setTimeout(() => generateVideo(retryCount + 1), delay);
                             } else {
-                              setErrorInfo({ type: 'quota', message: "Video generation quota exceeded." });
+                              setErrorInfo({ 
+                                type: 'quota', 
+                                message: "Video generation quota exceeded.",
+                                onRetry: () => generateVideo(0)
+                              });
                             }
-                          } else if (errStr.includes("403") || errStr.includes("permission_denied") || errStr.includes("not found")) {
+                          } else if (isPermission) {
                             setErrorInfo({ 
                               type: 'permission', 
                               message: "Permission denied for video generation. Veo requires an API key from a PAID Google Cloud project (see ai.google.dev/gemini-api/docs/billing). Please re-select your key." 
@@ -932,6 +956,17 @@ export default function TutoringInterface() {
                       className="px-3 py-1.5 bg-white text-rose-600 text-[10px] font-bold rounded-lg hover:bg-rose-50 transition-colors"
                     >
                       Select Key
+                    </button>
+                  )}
+                  {errorInfo.onRetry && (
+                    <button
+                      onClick={() => {
+                        errorInfo.onRetry?.();
+                        setErrorInfo(null);
+                      }}
+                      className="px-3 py-1.5 bg-white text-rose-600 text-[10px] font-bold rounded-lg hover:bg-rose-50 transition-colors"
+                    >
+                      Retry
                     </button>
                   )}
                   <button
