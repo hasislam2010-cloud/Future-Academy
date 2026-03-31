@@ -49,6 +49,7 @@ export default function TutoringInterface() {
     isMutedRef.current = muted;
   };
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
   const [messages, setMessages] = useState<{ id: string; role: 'user' | 'tutor'; text: string }[]>([]);
   const [currentVisual, setCurrentVisual] = useState<{ type: '3d' | 'image' | 'video' | 'code' | 'none'; url?: string; prompt?: string; engine?: string }>({ type: 'none' });
   const [isConnecting, setIsConnecting] = useState(false);
@@ -126,6 +127,7 @@ export default function TutoringInterface() {
   }, []);
 
   const handleStartCall = async () => {
+    setCallError(null);
     isClosingRef.current = false;
     setIsConnecting(true);
     try {
@@ -136,15 +138,26 @@ export default function TutoringInterface() {
         }
       }
 
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || "dummy_key";
+      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === "dummy_key") {
+        throw new Error("Gemini API Key is missing. Please select a valid API key in the settings (top right).");
+      }
       
       aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
       
       // Setup Audio Context for playback
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
       
       // Setup Microphone
-      mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (micErr) {
+        throw new Error("Microphone access denied. Please allow microphone permissions to use voice tutoring.");
+      }
+      
       const source = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
       
       const workletCode = `
@@ -419,6 +432,7 @@ export default function TutoringInterface() {
       
       sessionPromise.catch(async (error) => {
         console.error("Failed to connect to Live API:", error);
+        setCallError(error.message || "Failed to connect to the AI service.");
         if (error.message && (error.message.includes("API key not valid") || error.message.includes("Requested entity was not found") || error.message.includes("403") || error.message.includes("PERMISSION_DENIED"))) {
           if ((window as any).aistudio) {
             await (window as any).aistudio.openSelectKey();
@@ -428,8 +442,9 @@ export default function TutoringInterface() {
       });
       
       sessionRef.current = sessionPromise;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to start call:", error);
+      setCallError(error.message || "An unexpected error occurred.");
       setIsConnecting(false);
     }
   };
@@ -521,6 +536,19 @@ export default function TutoringInterface() {
         {/* Visual Content Area */}
         <div className="flex-1 relative flex items-center justify-center overflow-hidden">
           <AnimatePresence mode="wait">
+            {callError && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="absolute top-20 left-1/2 -translate-x-1/2 z-30 bg-rose-500/90 backdrop-blur-md text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-rose-400/50 max-w-md text-center"
+              >
+                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+                  <span className="font-bold">!</span>
+                </div>
+                <p className="text-sm font-medium">{callError}</p>
+                <button onClick={() => setCallError(null)} className="ml-2 text-white/60 hover:text-white">✕</button>
+              </motion.div>
+            )}
             {!isCallActive ? (
               <motion.div 
                 key="inactive"
