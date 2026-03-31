@@ -71,7 +71,7 @@ export default function TutoringInterface() {
         }
       }
 
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || "dummy_key";
       
       aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
       
@@ -282,6 +282,17 @@ export default function TutoringInterface() {
           }
         }
       });
+      
+      sessionPromise.catch(async (error) => {
+        console.error("Failed to connect to Live API:", error);
+        if (error.message && (error.message.includes("API key not valid") || error.message.includes("Requested entity was not found") || error.message.includes("403") || error.message.includes("PERMISSION_DENIED"))) {
+          if ((window as any).aistudio) {
+            await (window as any).aistudio.openSelectKey();
+          }
+        }
+        handleEndCall();
+      });
+      
       sessionRef.current = sessionPromise;
     } catch (error) {
       console.error("Failed to start call:", error);
