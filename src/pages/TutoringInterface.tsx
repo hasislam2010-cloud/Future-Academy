@@ -14,7 +14,8 @@ Whenever a student asks ANY question, you MUST call the \`update_ui\` tool to up
 
 Engine A: The Logic Renderer (Math, Physics, Live Data)
 Approved Models: Three.js, Manim, D3.js.
-Action: Output executable code payloads to simulate physics or draw data dynamically. The payload MUST be a complete, valid HTML document containing all necessary scripts and styles.
+Action: Output executable code payloads to simulate physics or draw data dynamically. The payload MUST be a complete, valid HTML document containing all necessary scripts and styles. 
+CRITICAL: Always include interactive elements. For example, add hover tooltips that explain variables, clickable elements that trigger state changes or animations, and smooth transitions. The UI should feel like a premium, responsive laboratory tool. Use modern CSS for a glassmorphism aesthetic that matches the Future Academy brand. Ensure the visualization is centered and scales beautifully to fill the screen. Use high-contrast colors for accessibility. If explaining a process, allow the student to "scrub" through the timeline or click "Next" to see the next stage.
 
 Engine B: The 3D Architect (Biology, Chemistry, Spatial Geometry, Geography)
 Approved Models: Tripo AI, Meshy, Luma Genie, Spline AI.
@@ -27,6 +28,8 @@ Action: Output an ultra-detailed text prompt explicitly commanding accurate typo
 Engine D: The Dynamic Animator (Simulations, Complex Reactions, Macro-scale Events)
 Approved Models: Runway Gen-3 Alpha, Luma Dream Machine, Kling AI, Veo.
 Action: Output a highly descriptive cinematic video prompt to simulate the event.
+
+CRITICAL: For Engine B (3D) and Engine D (Video), you MUST also provide a 'loading_visualization_code' (Engine A style). This should be a simple, fast-loading CSS or Canvas animation that represents the core concept (e.g., a spinning atom, a flowing river, a pulsing cell). This allows the student to visualize the concept in real-time while the high-fidelity asset generates.
 
 When you speak, be warm, wise, friendly, and highly intelligent.`;
 
@@ -51,7 +54,15 @@ export default function TutoringInterface() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [callError, setCallError] = useState<string | null>(null);
   const [messages, setMessages] = useState<{ id: string; role: 'user' | 'tutor'; text: string }[]>([]);
-  const [currentVisual, setCurrentVisual] = useState<{ type: '3d' | 'image' | 'video' | 'code' | 'none'; url?: string; prompt?: string; engine?: string }>({ type: 'none' });
+  const [currentVisual, setCurrentVisual] = useState<{ 
+    type: '3d' | 'image' | 'video' | 'code' | 'none'; 
+    url?: string; 
+    videoUrl?: string;
+    prompt?: string; 
+    loadingCode?: string;
+    engine?: string;
+    isVideoGenerating?: boolean;
+  }>({ type: 'none' });
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionStep, setConnectionStep] = useState<string>("");
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -249,6 +260,7 @@ export default function TutoringInterface() {
                 properties: {
                   ui_action: { type: Type.STRING, description: "ENGINE_A_CODE, ENGINE_B_3D, ENGINE_C_IMAGE, or ENGINE_D_VIDEO" },
                   visual_payload: { type: Type.STRING, description: "Target model name and logic string/prompt" },
+                  loading_visualization_code: { type: Type.STRING, description: "Optional: Simple CSS/Canvas animation to show while high-fidelity assets generate" },
                   sidebar_notes: { type: Type.STRING, description: "Markdown breakdown of core facts" }
                 },
                 required: ["ui_action", "visual_payload", "sidebar_notes"]
@@ -389,15 +401,19 @@ export default function TutoringInterface() {
                   setCurrentVisual({
                     type: visualType,
                     prompt: args.visual_payload,
+                    loadingCode: args.loading_visualization_code,
                     url: `https://picsum.photos/seed/${encodeURIComponent(args.visual_payload.substring(0, 20))}/1920/1080?blur=2`,
-                    engine: args.ui_action
+                    engine: args.ui_action,
+                    isVideoGenerating: args.ui_action === 'ENGINE_D_VIDEO'
                   });
 
-                  // Generate real image in background
-                  const imageApiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-                  if (imageApiKey) {
-                    const imageAi = new GoogleGenAI({ apiKey: imageApiKey as string });
-                    imageAi.models.generateContent({
+                  // Generate real image in background (as preview for video or as final for image)
+                  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+                  if (apiKey) {
+                    const ai = new GoogleGenAI({ apiKey: apiKey as string });
+                    
+                    // Immediate Image Generation (Preview)
+                    ai.models.generateContent({
                       model: 'gemini-2.5-flash-image',
                       contents: args.visual_payload,
                       config: {
@@ -411,16 +427,47 @@ export default function TutoringInterface() {
                           break;
                         }
                       }
-                    }).catch(err => {
-                      console.error("Image generation failed:", err);
-                      if (err.message && (err.message.includes("403") || err.message.includes("PERMISSION_DENIED") || err.message.includes("Requested entity was not found"))) {
-                        if ((window as any).aistudio) {
-                          (window as any).aistudio.openSelectKey();
+                    }).catch(err => console.error("Image generation failed:", err));
+
+                    // If it's a video, start the long-running generation
+                    if (args.ui_action === 'ENGINE_D_VIDEO') {
+                      ai.models.generateVideos({
+                        model: 'veo-3.1-fast-generate-preview',
+                        prompt: args.visual_payload,
+                        config: {
+                          numberOfVideos: 1,
+                          resolution: '720p',
+                          aspectRatio: '16:9'
                         }
-                      }
-                    });
+                      }).then(async (operation) => {
+                        let op = operation;
+                        while (!op.done) {
+                          // Faster polling: 2 seconds instead of 5
+                          await new Promise(resolve => setTimeout(resolve, 2000));
+                          op = await ai.operations.getVideosOperation({ operation: op });
+                        }
+                        
+                        const downloadLink = op.response?.generatedVideos?.[0]?.video?.uri;
+                        if (downloadLink) {
+                          const videoResponse = await fetch(downloadLink, {
+                            method: 'GET',
+                            headers: { 'x-goog-api-key': apiKey as string },
+                          });
+                          const blob = await videoResponse.blob();
+                          const videoUrl = URL.createObjectURL(blob);
+                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { 
+                            ...prev, 
+                            videoUrl: videoUrl,
+                            isVideoGenerating: false 
+                          } : prev);
+                        }
+                      }).catch(err => {
+                        console.error("Video generation failed:", err);
+                        setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, isVideoGenerating: false } : prev);
+                      });
+                    }
                   } else {
-                    console.error("API_KEY is missing for image generation. Please select an API key.");
+                    console.error("API_KEY is missing. Please select an API key.");
                     if ((window as any).aistudio) {
                       (window as any).aistudio.openSelectKey();
                     }
@@ -648,46 +695,97 @@ export default function TutoringInterface() {
                 )}
                 
                 {currentVisual.type === 'code' && currentVisual.prompt && (
-                  <div className="w-full h-full bg-white">
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="w-full h-full bg-slate-950 relative"
+                  >
                     <iframe
                       srcDoc={currentVisual.prompt}
                       className="w-full h-full border-none"
-                      title="Code Visualization"
+                      title="Interactive Science Lab"
                       sandbox="allow-scripts allow-same-origin"
                     />
-                  </div>
+                    {/* Interactive Overlay Hint */}
+                    <div className="absolute bottom-4 right-4 pointer-events-none">
+                      <div className="bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 px-3 py-1.5 rounded-full flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+                        <span className="text-[10px] uppercase tracking-widest text-indigo-300 font-bold">Interactive Lab Active</span>
+                      </div>
+                    </div>
+                  </motion.div>
                 )}
 
                 {currentVisual.type === 'video' && (
-                  <div className="w-full h-full bg-slate-900 flex items-center justify-center relative">
-                    {currentVisual.url && (
-                      <img 
-                        src={currentVisual.url} 
-                        alt="Video Thumbnail" 
-                        className="absolute inset-0 w-full h-full object-cover opacity-50"
-                        referrerPolicy="no-referrer"
+                  <div className="w-full h-full bg-slate-900 flex items-center justify-center relative overflow-hidden">
+                    {currentVisual.videoUrl ? (
+                      <motion.video 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        src={currentVisual.videoUrl} 
+                        autoPlay 
+                        loop 
+                        muted 
+                        className="w-full h-full object-cover"
                       />
+                    ) : (
+                      <>
+                        {currentVisual.url && (
+                          <motion.img 
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 0.4 }}
+                            src={currentVisual.url} 
+                            alt="Video Preview" 
+                            className="absolute inset-0 w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        )}
+                        {currentVisual.loadingCode && (
+                          <div className="absolute inset-0 z-10 opacity-80">
+                            <iframe
+                              srcDoc={currentVisual.loadingCode}
+                              className="w-full h-full border-none"
+                              title="Real-time Simulation Preview"
+                              sandbox="allow-scripts allow-same-origin"
+                            />
+                          </div>
+                        )}
+                        <div className="text-center relative z-20 bg-slate-900/40 backdrop-blur-md p-6 rounded-3xl border border-white/10 shadow-2xl">
+                          <div className="w-10 h-10 mx-auto mb-3 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                          <h3 className="text-white font-bold text-base mb-0.5">Real-time Simulation...</h3>
+                          <p className="text-indigo-300 text-[10px] max-w-[180px] mx-auto">High-fidelity rendering in progress. Visualizing concept live.</p>
+                        </div>
+                      </>
                     )}
-                    <div className="text-center relative z-10">
-                      <div className="w-16 h-16 mx-auto mb-4 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-indigo-300 font-medium">Generating Video Simulation...</p>
-                    </div>
                   </div>
                 )}
 
                 {currentVisual.type === '3d' && (
-                  <div className="w-full h-full bg-slate-900 flex items-center justify-center relative">
+                  <div className="w-full h-full bg-slate-900 flex items-center justify-center relative overflow-hidden">
                     {currentVisual.url && (
-                      <img 
+                      <motion.img 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 0.4 }}
                         src={currentVisual.url} 
-                        alt="3D Model Thumbnail" 
-                        className="absolute inset-0 w-full h-full object-cover opacity-50"
+                        alt="3D Preview" 
+                        className="absolute inset-0 w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
                     )}
-                    <div className="text-center relative z-10">
-                      <div className="w-16 h-16 mx-auto mb-4 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                      <p className="text-emerald-300 font-medium">Generating 3D Model...</p>
+                    {currentVisual.loadingCode && (
+                      <div className="absolute inset-0 z-10 opacity-80">
+                        <iframe
+                          srcDoc={currentVisual.loadingCode}
+                          className="w-full h-full border-none"
+                          title="Spatial Preview"
+                          sandbox="allow-scripts allow-same-origin"
+                        />
+                      </div>
+                    )}
+                    <div className="text-center relative z-20 bg-slate-900/40 backdrop-blur-md p-6 rounded-3xl border border-white/10 shadow-2xl">
+                      <div className="w-10 h-10 mx-auto mb-3 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                      <h3 className="text-white font-bold text-base mb-0.5">Architecting Space...</h3>
+                      <p className="text-emerald-300 text-[10px] max-w-[180px] mx-auto">Constructing spatial model. Real-time preview active.</p>
                     </div>
                   </div>
                 )}
