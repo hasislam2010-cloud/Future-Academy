@@ -71,10 +71,9 @@ export default function TutoringInterface() {
         }
       }
 
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY is missing");
+      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
       
-      aiRef.current = new GoogleGenAI({ apiKey });
+      aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
       
       // Setup Audio Context for playback
       audioContextRef.current = new AudioContext({ sampleRate: 24000 });
@@ -213,9 +212,9 @@ export default function TutoringInterface() {
                   });
 
                   // Generate real image in background
-                  const imageApiKey = process.env.API_KEY;
+                  const imageApiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
                   if (imageApiKey) {
-                    const imageAi = new GoogleGenAI({ apiKey: imageApiKey });
+                    const imageAi = new GoogleGenAI({ apiKey: imageApiKey as string });
                     imageAi.models.generateContent({
                       model: 'gemini-2.5-flash-image',
                       contents: args.visual_payload,
