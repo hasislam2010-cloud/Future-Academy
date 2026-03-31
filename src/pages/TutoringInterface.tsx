@@ -53,6 +53,7 @@ export default function TutoringInterface() {
   const [messages, setMessages] = useState<{ id: string; role: 'user' | 'tutor'; text: string }[]>([]);
   const [currentVisual, setCurrentVisual] = useState<{ type: '3d' | 'image' | 'video' | 'code' | 'none'; url?: string; prompt?: string; engine?: string }>({ type: 'none' });
   const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionStep, setConnectionStep] = useState<string>("");
   const chatEndRef = useRef<HTMLDivElement>(null);
   
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -128,9 +129,11 @@ export default function TutoringInterface() {
 
   const handleStartCall = async () => {
     setCallError(null);
+    setConnectionStep("Initializing...");
     isClosingRef.current = false;
     setIsConnecting(true);
     try {
+      setConnectionStep("Checking API Key...");
       if ((window as any).aistudio) {
         const hasKey = await (window as any).aistudio.hasSelectedApiKey();
         if (!hasKey) {
@@ -147,6 +150,7 @@ export default function TutoringInterface() {
                      ""; 
       
       if (!apiKey && !(window as any).aistudio) {
+        setConnectionStep("API Key Missing");
         // Instead of throwing, we'll show a prompt to enter the key if it's missing on a custom domain
         const manualKey = window.prompt("Gemini API Key is missing. Please enter your API key to continue (this will be saved locally):");
         if (manualKey) {
@@ -157,14 +161,22 @@ export default function TutoringInterface() {
         throw new Error("Gemini API Key is missing. Please ensure the GEMINI_API_KEY environment variable is set in your project settings.");
       }
       
+      setConnectionStep("Setting up Audio...");
       aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
       
       // Setup Audio Context for playback
-      audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+      try {
+        audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+      } catch (e) {
+        console.warn("Failed to create AudioContext with 24kHz, falling back to default:", e);
+        audioContextRef.current = new AudioContext();
+      }
+
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
       }
       
+      setConnectionStep("Accessing Microphone...");
       // Setup Microphone
       try {
         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -174,6 +186,7 @@ export default function TutoringInterface() {
       
       const source = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
       
+      setConnectionStep("Loading Audio Processor...");
       const workletCode = `
         class PCMProcessor extends AudioWorkletProcessor {
           constructor() {
@@ -199,15 +212,24 @@ export default function TutoringInterface() {
         }
         registerProcessor('pcm-processor', PCMProcessor);
       `;
-      const blob = new Blob([workletCode], { type: 'application/javascript' });
-      const url = URL.createObjectURL(blob);
-      await audioContextRef.current.audioWorklet.addModule(url);
+      
+      // Use data URL instead of blob URL to bypass some CSP restrictions
+      const workletUrl = `data:application/javascript;base64,${btoa(workletCode)}`;
+      try {
+        await audioContextRef.current.audioWorklet.addModule(workletUrl);
+      } catch (workletErr) {
+        console.error("AudioWorklet failed, trying blob fallback:", workletErr);
+        const workletBlob = new Blob([workletCode], { type: 'application/javascript' });
+        const blobUrl = URL.createObjectURL(workletBlob);
+        await audioContextRef.current.audioWorklet.addModule(blobUrl);
+      }
       
       processorRef.current = new AudioWorkletNode(audioContextRef.current, 'pcm-processor');
       
       source.connect(processorRef.current);
       processorRef.current.connect(audioContextRef.current.destination);
 
+      setConnectionStep("Connecting to AI...");
       const sessionPromise = aiRef.current.live.connect({
         model: "gemini-3.1-flash-live-preview",
         config: {
@@ -234,6 +256,7 @@ export default function TutoringInterface() {
         },
         callbacks: {
           onopen: () => {
+            setConnectionStep("Connected!");
             setIsConnecting(false);
             setCallActive(true);
             
@@ -431,13 +454,19 @@ export default function TutoringInterface() {
             }
           },
           onclose: () => {
+            if (isCallActiveRef.current) {
+              console.warn("Live API connection closed unexpectedly.");
+              setCallError("Connection closed unexpectedly. Please try again.");
+            }
             handleEndCall();
           },
           onerror: (err) => {
             if (err?.message?.includes("Network error")) {
               console.warn("Live API Network Error - likely connection drop:", err);
+              setCallError("Network error: Connection dropped. Check your internet or Cloudflare settings.");
             } else {
               console.error("Live API Error:", err);
+              setCallError(`Live API Error: ${err?.message || "Unknown error"}`);
             }
             handleEndCall();
           }
@@ -474,6 +503,7 @@ export default function TutoringInterface() {
     activeSessionRef.current = null;
     setCallActive(false);
     setIsConnecting(false);
+    setConnectionStep("");
     setMessages([]);
     setCurrentVisual({ type: 'none' });
     
@@ -679,10 +709,15 @@ export default function TutoringInterface() {
             <button
               onClick={handleStartCall}
               disabled={isConnecting}
-              className="flex items-center gap-2 px-6 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/50 text-white font-bold transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5"
+              className="flex flex-col items-center gap-1 px-8 py-3 rounded-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/50 text-white font-bold transition-all shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5"
             >
-              {isConnecting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mic className="w-5 h-5" />}
-              {isConnecting ? 'Connecting...' : 'Start Voice Call'}
+              <div className="flex items-center gap-2">
+                {isConnecting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Mic className="w-5 h-5" />}
+                {isConnecting ? 'Connecting...' : 'Start Voice Call'}
+              </div>
+              {isConnecting && connectionStep && (
+                <span className="text-[10px] font-normal opacity-70 animate-pulse">{connectionStep}</span>
+              )}
             </button>
           ) : (
             <>
