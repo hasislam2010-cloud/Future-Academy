@@ -465,8 +465,20 @@ export default function TutoringInterface() {
             const reason = event?.reason || "No reason provided";
             const code = event?.code || "Unknown code";
             console.warn(`Live API connection closed. Code: ${code}, Reason: ${reason}`);
-            if (isCallActiveRef.current) {
-              setCallError(`Connection lost (Code: ${code}). ${reason.includes('API_KEY') ? 'Check your API Key.' : 'Please try again.'}`);
+            console.log(`Current document referrer: ${document.referrer || "<empty>"}`);
+            
+            if (isCallActiveRef.current || isConnecting) {
+              let errorMessage = `Connection lost (Code: ${code}).`;
+              
+              if (reason.includes('referer <empty>')) {
+                errorMessage = "Browser is blocking the 'Referer' header. Please disable privacy extensions or check your Cloudflare Referrer-Policy settings.";
+              } else if (reason.includes('API_KEY')) {
+                errorMessage = "Check your API Key. It might be invalid or restricted.";
+              } else {
+                errorMessage += ` ${reason}`;
+              }
+              
+              setCallError(errorMessage);
             }
             handleEndCall();
           },
