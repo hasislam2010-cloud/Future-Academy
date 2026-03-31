@@ -141,11 +141,20 @@ export default function TutoringInterface() {
       // More resilient API key retrieval
       const apiKey = process.env.API_KEY || 
                      process.env.GEMINI_API_KEY || 
+                     (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+                     localStorage.getItem('CUSTOM_GEMINI_API_KEY') ||
                      (window as any)._env_?.GEMINI_API_KEY ||
                      ""; 
       
       if (!apiKey && !(window as any).aistudio) {
-        throw new Error("Gemini API Key is missing. If you are hosting this on a custom domain, please ensure the GEMINI_API_KEY environment variable is set.");
+        // Instead of throwing, we'll show a prompt to enter the key if it's missing on a custom domain
+        const manualKey = window.prompt("Gemini API Key is missing. Please enter your API key to continue (this will be saved locally):");
+        if (manualKey) {
+          localStorage.setItem('CUSTOM_GEMINI_API_KEY', manualKey);
+          window.location.reload();
+          return;
+        }
+        throw new Error("Gemini API Key is missing. Please ensure the GEMINI_API_KEY environment variable is set in your project settings.");
       }
       
       aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
