@@ -59,6 +59,7 @@ export default function TutoringInterface() {
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const sessionRef = useRef<any>(null);
   const activeSessionRef = useRef<any>(null);
+  const isClosingRef = useRef(false);
   const aiRef = useRef<GoogleGenAI | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
@@ -69,26 +70,44 @@ export default function TutoringInterface() {
 
   useEffect(() => {
     const handleGlobalError = (event: ErrorEvent) => {
-      const errorStr = event.error instanceof Error ? event.error.message : String(event.message || event.error);
-      if (errorStr.includes('WebSocket is already in CLOSING or CLOSED state')) {
+      const errorStr = (event.error instanceof Error ? event.error.message : String(event.message || event.error)).toLowerCase();
+      if (errorStr.includes('websocket') && (errorStr.includes('closing') || errorStr.includes('closed'))) {
+        event.stopImmediatePropagation();
         event.preventDefault();
       }
     };
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      const reasonStr = event.reason instanceof Error ? event.reason.message : String(event.reason);
-      if (reasonStr.includes('WebSocket is already in CLOSING or CLOSED state')) {
+      const reasonStr = (event.reason instanceof Error ? event.reason.message : String(event.reason)).toLowerCase();
+      if (reasonStr.includes('websocket') && (reasonStr.includes('closing') || reasonStr.includes('closed'))) {
+        event.stopImmediatePropagation();
         event.preventDefault();
       }
     };
-    window.addEventListener('error', handleGlobalError);
-    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    
+    // Also use window.onerror for legacy/broader support
+    const originalOnError = window.onerror;
+    window.onerror = (message, source, lineno, colno, error) => {
+      const msg = String(message || error?.message || error).toLowerCase();
+      if (msg.includes('websocket') && (msg.includes('closing') || msg.includes('closed'))) {
+        return true; // Suppress
+      }
+      if (originalOnError) {
+        return originalOnError(message, source, lineno, colno, error);
+      }
+      return false;
+    };
+
+    window.addEventListener('error', handleGlobalError, true);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection, true);
     return () => {
-      window.removeEventListener('error', handleGlobalError);
-      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+      window.removeEventListener('error', handleGlobalError, true);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection, true);
+      window.onerror = originalOnError;
     };
   }, []);
 
   const handleStartCall = async () => {
+    isClosingRef.current = false;
     setIsConnecting(true);
     try {
       if ((window as any).aistudio) {
@@ -174,20 +193,33 @@ export default function TutoringInterface() {
             
             // Send initial context
             sessionPromise.then(session => {
+              if (isClosingRef.current) {
+                try { session.close(); } catch (e) {}
+                return;
+              }
               activeSessionRef.current = session;
               if (isCallActiveRef.current && activeSessionRef.current) {
                 try {
                   activeSessionRef.current.sendRealtimeInput({
                     text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
                   });
-                } catch (e) {
-                  console.error("Error sending initial context:", e);
+                } catch (e: any) {
+                  if (!e?.message?.toLowerCase().includes('closing') && !e?.message?.toLowerCase().includes('closed')) {
+                    console.error("Error sending initial context:", e);
+                  }
                 }
               }
             });
 
             processorRef.current!.port.onmessage = (e) => {
-              if (isMutedRef.current || !isCallActiveRef.current || !activeSessionRef.current) return;
+              if (isMutedRef.current || !isCallActiveRef.current || !activeSessionRef.current || isClosingRef.current) return;
+              
+              // Extra safety check on internal WebSocket state if accessible
+              if (activeSessionRef.current.ws && activeSessionRef.current.ws.readyState !== 1) {
+                activeSessionRef.current = null;
+                return;
+              }
+
               const inputData = e.data as Float32Array;
               const pcm16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
@@ -202,8 +234,11 @@ export default function TutoringInterface() {
                     data: base64
                   }
                 });
-              } catch (e) {
-                console.error("Error sending audio:", e);
+              } catch (e: any) {
+                // Silently catch WebSocket state errors
+                if (!e?.message?.includes('CLOSING') && !e?.message?.includes('CLOSED')) {
+                  console.error("Error sending audio:", e);
+                }
               }
             };
           },
@@ -328,7 +363,7 @@ export default function TutoringInterface() {
                 }
 
                 // Send tool response
-                if (isCallActiveRef.current && activeSessionRef.current) {
+                if (isCallActiveRef.current && activeSessionRef.current && !isClosingRef.current) {
                   try {
                     activeSessionRef.current.sendToolResponse({
                       functionResponses: [{
@@ -337,8 +372,10 @@ export default function TutoringInterface() {
                         response: { result: "UI updated successfully" }
                       }]
                     });
-                  } catch (e) {
-                    console.error("Error sending tool response:", e);
+                  } catch (e: any) {
+                    if (!e?.message?.toLowerCase().includes('closing') && !e?.message?.toLowerCase().includes('closed')) {
+                      console.error("Error sending tool response:", e);
+                    }
                   }
                 }
               }
@@ -372,6 +409,14 @@ export default function TutoringInterface() {
   };
 
   const handleEndCall = () => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
+    
+    if (processorRef.current) {
+      processorRef.current.port.onmessage = null;
+    }
+    
+    activeSessionRef.current = null;
     setCallActive(false);
     setIsConnecting(false);
     setMessages([]);
@@ -384,29 +429,32 @@ export default function TutoringInterface() {
     nextPlayTimeRef.current = 0;
     
     if (processorRef.current) {
-      processorRef.current.port.onmessage = null;
-      processorRef.current.disconnect();
+      try { processorRef.current.disconnect(); } catch (e) {}
       processorRef.current = null;
     }
     if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      try { mediaStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) {}
       mediaStreamRef.current = null;
     }
     if (audioContextRef.current) {
-      audioContextRef.current.close();
+      try { audioContextRef.current.close(); } catch (e) {}
       audioContextRef.current = null;
     }
-    if (sessionRef.current) {
-      sessionRef.current.then((session: any) => {
+    
+    const sessionToClose = sessionRef.current;
+    sessionRef.current = null;
+    
+    if (sessionToClose) {
+      sessionToClose.then((session: any) => {
         try {
-          session.close();
+          if (session && typeof session.close === 'function') {
+            session.close();
+          }
         } catch (e) {
-          console.error("Error closing session:", e);
+          // Ignore close errors
         }
-      }).catch((e: any) => console.error("Error resolving session to close:", e));
-      sessionRef.current = null;
+      }).catch(() => {});
     }
-    activeSessionRef.current = null;
   };
 
   const toggleFullscreen = () => {
