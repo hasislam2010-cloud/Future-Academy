@@ -141,20 +141,22 @@ export default function TutoringInterface() {
         }
       }
 
-      // More resilient API key retrieval
-      const apiKey = process.env.API_KEY || 
-                     process.env.GEMINI_API_KEY || 
-                     (import.meta as any).env?.VITE_GEMINI_API_KEY ||
-                     localStorage.getItem('CUSTOM_GEMINI_API_KEY') ||
-                     (window as any)._env_?.GEMINI_API_KEY ||
-                     ""; 
+      // More resilient API key retrieval with sanitization
+      let apiKey = process.env.API_KEY || 
+                   process.env.GEMINI_API_KEY || 
+                   (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+                   localStorage.getItem('CUSTOM_GEMINI_API_KEY') ||
+                   (window as any)._env_?.GEMINI_API_KEY ||
+                   ""; 
       
+      apiKey = apiKey.trim(); // Remove any invisible spaces
+
       if (!apiKey && !(window as any).aistudio) {
         setConnectionStep("API Key Missing");
         // Instead of throwing, we'll show a prompt to enter the key if it's missing on a custom domain
         const manualKey = window.prompt("Gemini API Key is missing. Please enter your API key to continue (this will be saved locally):");
         if (manualKey) {
-          localStorage.setItem('CUSTOM_GEMINI_API_KEY', manualKey);
+          localStorage.setItem('CUSTOM_GEMINI_API_KEY', manualKey.trim());
           window.location.reload();
           return;
         }
@@ -257,28 +259,34 @@ export default function TutoringInterface() {
         callbacks: {
           onopen: () => {
             setConnectionStep("Connected!");
-            setIsConnecting(false);
-            setCallActive(true);
-            
-            // Send initial context
-            sessionPromise.then(session => {
-              if (isClosingRef.current) {
-                try { session.close(); } catch (e) {}
-                return;
-              }
-              activeSessionRef.current = session;
-              if (isCallActiveRef.current && activeSessionRef.current) {
-                try {
-                  activeSessionRef.current.sendRealtimeInput({
-                    text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
-                  });
-                } catch (e: any) {
-                  if (!e?.message?.toLowerCase().includes('closing') && !e?.message?.toLowerCase().includes('closed')) {
-                    console.error("Error sending initial context:", e);
+            // Handshake delay: Wait 500ms before sending the first message
+            // This prevents Cloudflare from dropping the connection due to immediate traffic
+            setTimeout(() => {
+              if (isClosingRef.current) return;
+              
+              setIsConnecting(false);
+              setCallActive(true);
+              
+              // Send initial context
+              sessionPromise.then(session => {
+                if (isClosingRef.current) {
+                  try { session.close(); } catch (e) {}
+                  return;
+                }
+                activeSessionRef.current = session;
+                if (isCallActiveRef.current && activeSessionRef.current) {
+                  try {
+                    activeSessionRef.current.sendRealtimeInput({
+                      text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself.`
+                    });
+                  } catch (e: any) {
+                    if (!e?.message?.toLowerCase().includes('closing') && !e?.message?.toLowerCase().includes('closed')) {
+                      console.error("Error sending initial context:", e);
+                    }
                   }
                 }
-              }
-            });
+              });
+            }, 500);
 
             processorRef.current!.port.onmessage = (e) => {
               if (isMutedRef.current || !isCallActiveRef.current || !activeSessionRef.current || isClosingRef.current) return;
@@ -453,10 +461,12 @@ export default function TutoringInterface() {
               }
             }
           },
-          onclose: () => {
+          onclose: (event: any) => {
+            const reason = event?.reason || "No reason provided";
+            const code = event?.code || "Unknown code";
+            console.warn(`Live API connection closed. Code: ${code}, Reason: ${reason}`);
             if (isCallActiveRef.current) {
-              console.warn("Live API connection closed unexpectedly.");
-              setCallError("Connection closed unexpectedly. Please try again.");
+              setCallError(`Connection lost (Code: ${code}). ${reason.includes('API_KEY') ? 'Check your API Key.' : 'Please try again.'}`);
             }
             handleEndCall();
           },
