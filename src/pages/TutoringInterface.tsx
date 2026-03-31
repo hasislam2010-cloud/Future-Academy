@@ -37,12 +37,17 @@ export default function TutoringInterface() {
   const topic = searchParams.get('topic') || 'History';
 
   const [isCallActive, setIsCallActive] = useState(false);
+  const isCallActiveRef = useRef(isCallActive);
+  const setCallActive = (active: boolean) => {
+    setIsCallActive(active);
+    isCallActiveRef.current = active;
+  };
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
-
-  useEffect(() => {
-    isMutedRef.current = isMuted;
-  }, [isMuted]);
+  const setMuted = (muted: boolean) => {
+    setIsMuted(muted);
+    isMutedRef.current = muted;
+  };
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [messages, setMessages] = useState<{ id: string; role: 'user' | 'tutor'; text: string }[]>([]);
   const [currentVisual, setCurrentVisual] = useState<{ type: '3d' | 'image' | 'video' | 'code' | 'none'; url?: string; prompt?: string; engine?: string }>({ type: 'none' });
@@ -51,7 +56,7 @@ export default function TutoringInterface() {
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const processorRef = useRef<AudioWorkletNode | null>(null);
   const sessionRef = useRef<any>(null);
   const aiRef = useRef<GoogleGenAI | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
@@ -81,7 +86,37 @@ export default function TutoringInterface() {
       // Setup Microphone
       mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
       const source = audioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
-      processorRef.current = audioContextRef.current.createScriptProcessor(4096, 1, 1);
+      
+      const workletCode = `
+        class PCMProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.buffer = new Float32Array(4096);
+            this.bufferSize = 0;
+          }
+          process(inputs, outputs, parameters) {
+            const input = inputs[0];
+            if (input && input.length > 0) {
+              const channelData = input[0];
+              for (let i = 0; i < channelData.length; i++) {
+                this.buffer[this.bufferSize++] = channelData[i];
+                if (this.bufferSize >= 4096) {
+                  this.port.postMessage(this.buffer);
+                  this.buffer = new Float32Array(4096);
+                  this.bufferSize = 0;
+                }
+              }
+            }
+            return true;
+          }
+        }
+        registerProcessor('pcm-processor', PCMProcessor);
+      `;
+      const blob = new Blob([workletCode], { type: 'application/javascript' });
+      const url = URL.createObjectURL(blob);
+      await audioContextRef.current.audioWorklet.addModule(url);
+      
+      processorRef.current = new AudioWorkletNode(audioContextRef.current, 'pcm-processor');
       
       source.connect(processorRef.current);
       processorRef.current.connect(audioContextRef.current.destination);
@@ -113,30 +148,34 @@ export default function TutoringInterface() {
         callbacks: {
           onopen: () => {
             setIsConnecting(false);
-            setIsCallActive(true);
+            setCallActive(true);
             
             // Send initial context
             sessionPromise.then(session => {
-              session.sendRealtimeInput({
-                text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
-              });
+              if (isCallActiveRef.current) {
+                session.sendRealtimeInput({
+                  text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
+                });
+              }
             });
 
-            processorRef.current!.onaudioprocess = (e) => {
-              if (isMutedRef.current) return;
-              const inputData = e.inputBuffer.getChannelData(0);
+            processorRef.current!.port.onmessage = (e) => {
+              if (isMutedRef.current || !isCallActiveRef.current) return;
+              const inputData = e.data as Float32Array;
               const pcm16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
                 pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 32767;
               }
               const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
               sessionPromise.then(session => {
-                session.sendRealtimeInput({
-                  audio: {
-                    mimeType: "audio/pcm;rate=24000",
-                    data: base64
-                  }
-                });
+                if (isCallActiveRef.current) {
+                  session.sendRealtimeInput({
+                    audio: {
+                      mimeType: "audio/pcm;rate=24000",
+                      data: base64
+                    }
+                  });
+                }
               });
             };
           },
@@ -262,13 +301,15 @@ export default function TutoringInterface() {
 
                 // Send tool response
                 sessionPromise.then(session => {
-                  session.sendToolResponse({
-                    functionResponses: [{
-                      id: call.id,
-                      name: call.name,
-                      response: { result: "UI updated successfully" }
-                    }]
-                  });
+                  if (isCallActiveRef.current) {
+                    session.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: "UI updated successfully" }
+                      }]
+                    });
+                  }
                 });
               }
             }
@@ -301,7 +342,7 @@ export default function TutoringInterface() {
   };
 
   const handleEndCall = () => {
-    setIsCallActive(false);
+    setCallActive(false);
     setIsConnecting(false);
     setMessages([]);
     setCurrentVisual({ type: 'none' });
@@ -313,6 +354,7 @@ export default function TutoringInterface() {
     nextPlayTimeRef.current = 0;
     
     if (processorRef.current) {
+      processorRef.current.port.onmessage = null;
       processorRef.current.disconnect();
       processorRef.current = null;
     }
@@ -494,7 +536,7 @@ export default function TutoringInterface() {
           ) : (
             <>
               <button
-                onClick={() => setIsMuted(!isMuted)}
+                onClick={() => setMuted(!isMuted)}
                 className={cn(
                   "w-12 h-12 rounded-full flex items-center justify-center transition-all",
                   isMuted 
