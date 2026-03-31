@@ -66,6 +66,27 @@ export default function TutoringInterface() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    const handleGlobalError = (event: ErrorEvent) => {
+      const errorStr = event.error instanceof Error ? event.error.message : String(event.message || event.error);
+      if (errorStr.includes('WebSocket is already in CLOSING or CLOSED state')) {
+        event.preventDefault();
+      }
+    };
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reasonStr = event.reason instanceof Error ? event.reason.message : String(event.reason);
+      if (reasonStr.includes('WebSocket is already in CLOSING or CLOSED state')) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener('error', handleGlobalError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => {
+      window.removeEventListener('error', handleGlobalError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
   const handleStartCall = async () => {
     setIsConnecting(true);
     try {
@@ -153,9 +174,13 @@ export default function TutoringInterface() {
             // Send initial context
             sessionPromise.then(session => {
               if (isCallActiveRef.current) {
-                session.sendRealtimeInput({
-                  text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
-                });
+                try {
+                  session.sendRealtimeInput({
+                    text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
+                  });
+                } catch (e) {
+                  console.error("Error sending initial context:", e);
+                }
               }
             });
 
@@ -169,12 +194,16 @@ export default function TutoringInterface() {
               const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
               sessionPromise.then(session => {
                 if (isCallActiveRef.current) {
-                  session.sendRealtimeInput({
-                    audio: {
-                      mimeType: "audio/pcm;rate=24000",
-                      data: base64
-                    }
-                  });
+                  try {
+                    session.sendRealtimeInput({
+                      audio: {
+                        mimeType: "audio/pcm;rate=24000",
+                        data: base64
+                      }
+                    });
+                  } catch (e) {
+                    console.error("Error sending audio:", e);
+                  }
                 }
               });
             };
@@ -302,13 +331,17 @@ export default function TutoringInterface() {
                 // Send tool response
                 sessionPromise.then(session => {
                   if (isCallActiveRef.current) {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: call.id,
-                        name: call.name,
-                        response: { result: "UI updated successfully" }
-                      }]
-                    });
+                    try {
+                      session.sendToolResponse({
+                        functionResponses: [{
+                          id: call.id,
+                          name: call.name,
+                          response: { result: "UI updated successfully" }
+                        }]
+                      });
+                    } catch (e) {
+                      console.error("Error sending tool response:", e);
+                    }
                   }
                 });
               }
@@ -367,7 +400,13 @@ export default function TutoringInterface() {
       audioContextRef.current = null;
     }
     if (sessionRef.current) {
-      sessionRef.current.then((session: any) => session.close());
+      sessionRef.current.then((session: any) => {
+        try {
+          session.close();
+        } catch (e) {
+          console.error("Error closing session:", e);
+        }
+      }).catch((e: any) => console.error("Error resolving session to close:", e));
       sessionRef.current = null;
     }
   };
