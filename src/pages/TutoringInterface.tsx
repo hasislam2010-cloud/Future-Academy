@@ -471,7 +471,7 @@ export default function TutoringInterface() {
               let errorMessage = `Connection lost (Code: ${code}).`;
               
               if (reason.includes('referer <empty>')) {
-                errorMessage = "Browser is blocking the 'Referer' header. Please disable privacy extensions or check your Cloudflare Referrer-Policy settings.";
+                errorMessage = "API Key Restriction Error: Your API key is restricted to specific websites, but the browser is not sending the 'Referer' header. \n\nTo fix this: \n1. Go to https://aistudio.google.com/app/apikey \n2. Click on your API key \n3. Under 'API Key Restrictions', either add your domain or select 'None' to remove restrictions.";
               } else if (reason.includes('API_KEY')) {
                 errorMessage = "Check your API Key. It might be invalid or restricted.";
               } else {
