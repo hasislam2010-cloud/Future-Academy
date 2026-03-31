@@ -58,6 +58,7 @@ export default function TutoringInterface() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const processorRef = useRef<AudioWorkletNode | null>(null);
   const sessionRef = useRef<any>(null);
+  const activeSessionRef = useRef<any>(null);
   const aiRef = useRef<GoogleGenAI | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
@@ -173,9 +174,10 @@ export default function TutoringInterface() {
             
             // Send initial context
             sessionPromise.then(session => {
-              if (isCallActiveRef.current) {
+              activeSessionRef.current = session;
+              if (isCallActiveRef.current && activeSessionRef.current) {
                 try {
-                  session.sendRealtimeInput({
+                  activeSessionRef.current.sendRealtimeInput({
                     text: `Hello Dr. Sam! I am a ${grade} student and I want to learn about ${topic}. Please introduce yourself and show me something interesting on the visual board.`
                   });
                 } catch (e) {
@@ -185,27 +187,24 @@ export default function TutoringInterface() {
             });
 
             processorRef.current!.port.onmessage = (e) => {
-              if (isMutedRef.current || !isCallActiveRef.current) return;
+              if (isMutedRef.current || !isCallActiveRef.current || !activeSessionRef.current) return;
               const inputData = e.data as Float32Array;
               const pcm16 = new Int16Array(inputData.length);
               for (let i = 0; i < inputData.length; i++) {
                 pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 32767;
               }
               const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
-              sessionPromise.then(session => {
-                if (isCallActiveRef.current) {
-                  try {
-                    session.sendRealtimeInput({
-                      audio: {
-                        mimeType: "audio/pcm;rate=24000",
-                        data: base64
-                      }
-                    });
-                  } catch (e) {
-                    console.error("Error sending audio:", e);
+              
+              try {
+                activeSessionRef.current.sendRealtimeInput({
+                  audio: {
+                    mimeType: "audio/pcm;rate=24000",
+                    data: base64
                   }
-                }
-              });
+                });
+              } catch (e) {
+                console.error("Error sending audio:", e);
+              }
             };
           },
           onmessage: async (message: LiveServerMessage) => {
@@ -329,21 +328,19 @@ export default function TutoringInterface() {
                 }
 
                 // Send tool response
-                sessionPromise.then(session => {
-                  if (isCallActiveRef.current) {
-                    try {
-                      session.sendToolResponse({
-                        functionResponses: [{
-                          id: call.id,
-                          name: call.name,
-                          response: { result: "UI updated successfully" }
-                        }]
-                      });
-                    } catch (e) {
-                      console.error("Error sending tool response:", e);
-                    }
+                if (isCallActiveRef.current && activeSessionRef.current) {
+                  try {
+                    activeSessionRef.current.sendToolResponse({
+                      functionResponses: [{
+                        id: call.id,
+                        name: call.name,
+                        response: { result: "UI updated successfully" }
+                      }]
+                    });
+                  } catch (e) {
+                    console.error("Error sending tool response:", e);
                   }
-                });
+                }
               }
             }
           },
@@ -409,6 +406,7 @@ export default function TutoringInterface() {
       }).catch((e: any) => console.error("Error resolving session to close:", e));
       sessionRef.current = null;
     }
+    activeSessionRef.current = null;
   };
 
   const toggleFullscreen = () => {
