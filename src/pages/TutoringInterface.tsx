@@ -134,6 +134,16 @@ export default function TutoringInterface() {
   const apiKeyRef = useRef<string>("");
   const lastVisualArgsRef = useRef<any>(null);
   const nextPlayTimeRef = useRef<number>(0);
+
+  const getLatestApiKey = () => {
+    let apiKey = process.env.API_KEY || 
+                 process.env.GEMINI_API_KEY || 
+                 (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+                 localStorage.getItem('CUSTOM_GEMINI_API_KEY') ||
+                 (window as any)._env_?.GEMINI_API_KEY ||
+                 ""; 
+    return apiKey.trim();
+  };
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
 
   useEffect(() => {
@@ -483,123 +493,128 @@ export default function TutoringInterface() {
                   });
 
                   // Generate real image in background (as preview for video or as final for image)
-                  const currentAi = aiRef.current;
-                  if (currentAi) {
-                    const generateImage = (retryCount = 0) => {
-                      currentAi.models.generateContent({
-                        model: 'gemini-2.5-flash-image',
-                        contents: args.visual_payload,
-                        config: {
-                          imageConfig: { aspectRatio: "16:9" }
+                  const generateImage = (retryCount = 0) => {
+                    const latestKey = getLatestApiKey();
+                    if (!latestKey) {
+                      console.error("API_KEY is missing for image generation.");
+                      return;
+                    }
+                    const currentAi = new GoogleGenAI({ apiKey: latestKey });
+                    
+                    currentAi.models.generateContent({
+                      model: 'gemini-2.5-flash-image',
+                      contents: args.visual_payload,
+                      config: {
+                        imageConfig: { aspectRatio: "16:9" }
+                      }
+                    }).then(response => {
+                      for (const part of response.candidates?.[0]?.content?.parts || []) {
+                        if (part.inlineData) {
+                          const imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, url: imageUrl } : prev);
+                          break;
                         }
-                      }).then(response => {
-                        for (const part of response.candidates?.[0]?.content?.parts || []) {
-                          if (part.inlineData) {
-                            const imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-                            setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, url: imageUrl } : prev);
-                            break;
-                          }
+                      }
+                    }).catch(err => {
+                      console.error("Image generation failed:", err);
+                      const errStr = JSON.stringify(err).toLowerCase();
+                      const isQuota = errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota");
+                      const isPermission = errStr.includes("403") || errStr.includes("permission_denied") || errStr.includes("caller does not have permission");
+
+                      if (isQuota) {
+                        if (retryCount < 3) {
+                          const delay = Math.pow(2, retryCount) * 2000;
+                          console.log(`Retrying image generation (attempt ${retryCount + 1}) in ${delay}ms...`);
+                          setTimeout(() => generateImage(retryCount + 1), delay);
+                        } else {
+                          setErrorInfo({ 
+                            type: 'quota', 
+                            message: "Image generation quota exceeded. Using placeholder visuals.",
+                            onRetry: () => generateImage(0)
+                          });
+                        }
+                      } else if (isPermission) {
+                        setErrorInfo({ type: 'permission', message: "Permission denied for image generation. Please re-select your API key." });
+                        if ((window as any).aistudio) (window as any).aistudio.openSelectKey();
+                      }
+                    });
+                  };
+
+                  generateImage();
+
+                  // If it's a video, start the long-running generation
+                  if (args.ui_action === 'ENGINE_D_VIDEO') {
+                    const generateVideo = (retryCount = 0) => {
+                      const latestKey = getLatestApiKey();
+                      if (!latestKey) {
+                        console.error("API_KEY is missing for video generation.");
+                        return;
+                      }
+                      const currentAi = new GoogleGenAI({ apiKey: latestKey });
+
+                      currentAi.models.generateVideos({
+                        model: 'veo-3.1-fast-generate-preview',
+                        prompt: args.visual_payload,
+                        config: {
+                          numberOfVideos: 1,
+                          resolution: '720p',
+                          aspectRatio: '16:9'
+                        }
+                      }).then(async (operation) => {
+                        let op = operation;
+                        while (!op.done) {
+                          // Faster polling: 2 seconds instead of 5
+                          await new Promise(resolve => setTimeout(resolve, 2000));
+                          op = await currentAi.operations.getVideosOperation({ operation: op });
+                        }
+                        
+                        const downloadLink = op.response?.generatedVideos?.[0]?.video?.uri;
+                        if (downloadLink) {
+                          const videoResponse = await fetch(downloadLink, {
+                            method: 'GET',
+                            headers: { 'x-goog-api-key': latestKey },
+                          });
+                          const blob = await videoResponse.blob();
+                          const videoUrl = URL.createObjectURL(blob);
+                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { 
+                            ...prev, 
+                            videoUrl: videoUrl,
+                            isVideoGenerating: false 
+                          } : prev);
                         }
                       }).catch(err => {
-                        console.error("Image generation failed:", err);
+                        console.error("Video generation failed:", err);
                         const errStr = JSON.stringify(err).toLowerCase();
                         const isQuota = errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota");
-                        const isPermission = errStr.includes("403") || errStr.includes("permission_denied");
+                        const isPermission = errStr.includes("403") || errStr.includes("permission_denied") || errStr.includes("not found") || errStr.includes("caller does not have permission");
 
                         if (isQuota) {
-                          if (retryCount < 3) {
-                            const delay = Math.pow(2, retryCount) * 2000;
-                            console.log(`Retrying image generation (attempt ${retryCount + 1}) in ${delay}ms...`);
-                            setTimeout(() => generateImage(retryCount + 1), delay);
+                          if (retryCount < 2) {
+                            const delay = Math.pow(2, retryCount) * 3000;
+                            console.log(`Retrying video generation (attempt ${retryCount + 1}) in ${delay}ms...`);
+                            setTimeout(() => generateVideo(retryCount + 1), delay);
                           } else {
                             setErrorInfo({ 
                               type: 'quota', 
-                              message: "Image generation quota exceeded. Using placeholder visuals.",
-                              onRetry: () => generateImage(0)
+                              message: "Video generation quota exceeded.",
+                              onRetry: () => generateVideo(0)
                             });
                           }
                         } else if (isPermission) {
-                          setErrorInfo({ type: 'permission', message: "Permission denied for image generation. Please re-select your API key." });
+                          setErrorInfo({ 
+                            type: 'permission', 
+                            message: "Permission denied for video generation. Veo requires an API key from a PAID Google Cloud project (see ai.google.dev/gemini-api/docs/billing). Please re-select your key." 
+                          });
+                          // Reset key selection state if it failed with 403
+                          if ((window as any).aistudio) {
+                            (window as any).aistudio.openSelectKey();
+                          }
                         }
+                        setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, isVideoGenerating: false } : prev);
                       });
                     };
 
-                    generateImage();
-
-                    // If it's a video, start the long-running generation
-                    if (args.ui_action === 'ENGINE_D_VIDEO') {
-                      const generateVideo = (retryCount = 0) => {
-                        currentAi.models.generateVideos({
-                          model: 'veo-3.1-fast-generate-preview',
-                          prompt: args.visual_payload,
-                          config: {
-                            numberOfVideos: 1,
-                            resolution: '720p',
-                            aspectRatio: '16:9'
-                          }
-                        }).then(async (operation) => {
-                          let op = operation;
-                          while (!op.done) {
-                            // Faster polling: 2 seconds instead of 5
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-                            op = await currentAi.operations.getVideosOperation({ operation: op });
-                          }
-                          
-                          const downloadLink = op.response?.generatedVideos?.[0]?.video?.uri;
-                          if (downloadLink) {
-                            // Use the stored API key for the fetch call
-                            const currentKey = apiKeyRef.current || process.env.API_KEY || process.env.GEMINI_API_KEY;
-                            const videoResponse = await fetch(downloadLink, {
-                              method: 'GET',
-                              headers: { 'x-goog-api-key': currentKey as string },
-                            });
-                            const blob = await videoResponse.blob();
-                            const videoUrl = URL.createObjectURL(blob);
-                            setCurrentVisual(prev => prev.prompt === args.visual_payload ? { 
-                              ...prev, 
-                              videoUrl: videoUrl,
-                              isVideoGenerating: false 
-                            } : prev);
-                          }
-                        }).catch(err => {
-                          console.error("Video generation failed:", err);
-                          const errStr = JSON.stringify(err).toLowerCase();
-                          const isQuota = errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota");
-                          const isPermission = errStr.includes("403") || errStr.includes("permission_denied") || errStr.includes("not found");
-
-                          if (isQuota) {
-                            if (retryCount < 2) {
-                              const delay = Math.pow(2, retryCount) * 3000;
-                              console.log(`Retrying video generation (attempt ${retryCount + 1}) in ${delay}ms...`);
-                              setTimeout(() => generateVideo(retryCount + 1), delay);
-                            } else {
-                              setErrorInfo({ 
-                                type: 'quota', 
-                                message: "Video generation quota exceeded.",
-                                onRetry: () => generateVideo(0)
-                              });
-                            }
-                          } else if (isPermission) {
-                            setErrorInfo({ 
-                              type: 'permission', 
-                              message: "Permission denied for video generation. Veo requires an API key from a PAID Google Cloud project (see ai.google.dev/gemini-api/docs/billing). Please re-select your key." 
-                            });
-                            // Reset key selection state if it failed with 403
-                            if ((window as any).aistudio) {
-                              (window as any).aistudio.openSelectKey();
-                            }
-                          }
-                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, isVideoGenerating: false } : prev);
-                        });
-                      };
-
-                      generateVideo();
-                    }
-                  } else {
-                    console.error("API_KEY is missing. Please select an API key.");
-                    if ((window as any).aistudio) {
-                      (window as any).aistudio.openSelectKey();
-                    }
+                    generateVideo();
                   }
                 } else if (args.ui_action === 'ENGINE_A_CODE') {
                   visualType = 'code';
