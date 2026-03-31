@@ -570,7 +570,6 @@ export default function TutoringInterface() {
                     <div className="text-center relative z-10">
                       <div className="w-16 h-16 mx-auto mb-4 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
                       <p className="text-indigo-300 font-medium">Generating Video Simulation...</p>
-                      <p className="text-slate-300 text-sm mt-2 max-w-md mx-auto bg-slate-900/80 p-2 rounded-lg">{currentVisual.prompt}</p>
                     </div>
                   </div>
                 )}
@@ -588,7 +587,6 @@ export default function TutoringInterface() {
                     <div className="text-center relative z-10">
                       <div className="w-16 h-16 mx-auto mb-4 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
                       <p className="text-emerald-300 font-medium">Generating 3D Model...</p>
-                      <p className="text-slate-300 text-sm mt-2 max-w-md mx-auto bg-slate-900/80 p-2 rounded-lg">{currentVisual.prompt}</p>
                     </div>
                   </div>
                 )}
@@ -596,8 +594,8 @@ export default function TutoringInterface() {
                 {currentVisual.type === 'image' && !currentVisual.url?.startsWith('data:') && (
                   <div className="absolute inset-0 bg-slate-900/40 flex items-center justify-center p-8">
                      <div className="bg-slate-900/80 backdrop-blur-md p-6 rounded-2xl border border-indigo-500/30 max-w-2xl text-center shadow-2xl">
-                        <div className="text-indigo-400 text-xs font-mono mb-2 uppercase tracking-widest">{currentVisual.engine}</div>
-                        <p className="text-white text-lg font-medium">Generating image: {currentVisual.prompt}</p>
+                        <div className="w-12 h-12 mx-auto mb-4 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                        <p className="text-white text-lg font-medium">Generating image...</p>
                      </div>
                   </div>
                 )}
