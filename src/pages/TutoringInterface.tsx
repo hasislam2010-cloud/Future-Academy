@@ -262,8 +262,10 @@ export default function TutoringInterface() {
             };
           },
           onmessage: async (message: LiveServerMessage) => {
+            if (!isCallActiveRef.current || isClosingRef.current || !audioContextRef.current) return;
+
             if (message.serverContent?.interrupted) {
-              nextPlayTimeRef.current = audioContextRef.current!.currentTime;
+              nextPlayTimeRef.current = audioContextRef.current.currentTime;
               activeSourcesRef.current.forEach(source => {
                 try { source.stop(); } catch (e) {}
               });
@@ -274,6 +276,7 @@ export default function TutoringInterface() {
               const parts = message.serverContent.modelTurn.parts;
               for (const part of parts) {
                 if (part.inlineData && part.inlineData.data) {
+                  if (!audioContextRef.current) break;
                   // Play raw PCM audio (16-bit, 24kHz, mono)
                   const binaryString = atob(part.inlineData.data);
                   const pcm16 = new Int16Array(binaryString.length / 2);
@@ -282,17 +285,17 @@ export default function TutoringInterface() {
                     pcm16[i] = binaryString.charCodeAt(i * 2) | (binaryString.charCodeAt(i * 2 + 1) << 8);
                   }
                   
-                  const audioBuffer = audioContextRef.current!.createBuffer(1, pcm16.length, 24000);
+                  const audioBuffer = audioContextRef.current.createBuffer(1, pcm16.length, 24000);
                   const channelData = audioBuffer.getChannelData(0);
                   for (let i = 0; i < pcm16.length; i++) {
                     channelData[i] = pcm16[i] / 32768.0;
                   }
                   
-                  const source = audioContextRef.current!.createBufferSource();
+                  const source = audioContextRef.current.createBufferSource();
                   source.buffer = audioBuffer;
-                  source.connect(audioContextRef.current!.destination);
+                  source.connect(audioContextRef.current.destination);
                   
-                  const currentTime = audioContextRef.current!.currentTime;
+                  const currentTime = audioContextRef.current.currentTime;
                   if (nextPlayTimeRef.current < currentTime) {
                     nextPlayTimeRef.current = currentTime;
                   }
@@ -404,7 +407,11 @@ export default function TutoringInterface() {
             handleEndCall();
           },
           onerror: (err) => {
-            console.error("Live API Error:", err);
+            if (err?.message?.includes("Network error")) {
+              console.warn("Live API Network Error - likely connection drop:", err);
+            } else {
+              console.error("Live API Error:", err);
+            }
             handleEndCall();
           }
         }
