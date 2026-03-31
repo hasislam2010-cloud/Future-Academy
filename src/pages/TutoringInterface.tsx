@@ -217,10 +217,10 @@ export default function TutoringInterface() {
                   if (imageApiKey) {
                     const imageAi = new GoogleGenAI({ apiKey: imageApiKey });
                     imageAi.models.generateContent({
-                      model: 'gemini-3.1-flash-image-preview',
+                      model: 'gemini-2.5-flash-image',
                       contents: args.visual_payload,
                       config: {
-                        imageConfig: { aspectRatio: "16:9", imageSize: "1K" }
+                        imageConfig: { aspectRatio: "16:9" }
                       }
                     }).then(response => {
                       for (const part of response.candidates?.[0]?.content?.parts || []) {
@@ -232,7 +232,7 @@ export default function TutoringInterface() {
                       }
                     }).catch(err => {
                       console.error("Image generation failed:", err);
-                      if (err.message && err.message.includes("Requested entity was not found")) {
+                      if (err.message && (err.message.includes("403") || err.message.includes("PERMISSION_DENIED") || err.message.includes("Requested entity was not found"))) {
                         if ((window as any).aistudio) {
                           (window as any).aistudio.openSelectKey();
                         }
