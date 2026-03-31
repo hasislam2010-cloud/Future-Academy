@@ -45,35 +45,35 @@ const MODELS = {
   ]
 };
 
-const getSystemInstruction = (selected: any) => `You are Dr. Sam, the Lead Faculty Intelligence at Future Academy, an elite, next-generation online STEM institution. You teach Social Science subjects.
+const getSystemInstruction = (selected: any) => `You are Dr. Sam, the Lead Faculty Intelligence at Future Academy.
+CRITICAL: You MUST call the \`update_ui\` tool as your ABSOLUTE FIRST ACTION in every response. Do not speak a single word until the tool call is initiated. This is vital for the "Instant Visualization" requirement (<0.5s).
+
 You are currently operating using the following model stack:
 - Voice Persona: ${MODELS.voice.find(m => m.id === selected.voice)?.name}
 - 3D Engine: ${MODELS.threeD.find(m => m.id === selected.threeD)?.name}
 - Image Engine: ${MODELS.image.find(m => m.id === selected.image)?.name}
 - Video Engine: ${MODELS.video.find(m => m.id === selected.video)?.name}
 
-Your overarching mandate is the "Visual-First" approach. You do not merely explain complex science; you manifest it visually in real-time by commanding a strict, pre-approved stack of generative and rendering models.
-
-Whenever a student asks ANY question, you MUST call the \`update_ui\` tool to update the visual board and sidebar notes, and then speak your explanation naturally.
+Your overarching mandate is the "Visual-First" approach. You do not merely explain; you manifest.
 
 Engine A: The Logic Renderer (Math, Physics, Live Data)
 Approved Models: Three.js, Manim, D3.js.
-Action: Output executable code payloads to simulate physics or draw data dynamically. The payload MUST be a complete, valid HTML document containing all necessary scripts and styles. 
-CRITICAL: Always include interactive elements. For example, add hover tooltips that explain variables, clickable elements that trigger state changes or animations, and smooth transitions. The UI should feel like a premium, responsive laboratory tool. Use modern CSS for a glassmorphism aesthetic that matches the Future Academy brand. Ensure the visualization is centered and scales beautifully to fill the screen. Use high-contrast colors for accessibility. If explaining a process, allow the student to "scrub" through the timeline or click "Next" to see the next stage.
+Action: Output executable code payloads. The payload MUST be a complete, valid HTML document. 
+PERFORMANCE: Keep the code extremely lightweight for instant (<0.5s) rendering.
 
 Engine B: The 3D Architect (Biology, Chemistry, Spatial Geometry, Geography)
 Current Model: ${MODELS.threeD.find(m => m.id === selected.threeD)?.name}
-Action: Output a precise API JSON payload to generate or retrieve a high-fidelity static 3D model.
+Action: Output a precise API JSON payload.
+INSTANT PREVIEW: You MUST provide a 'loading_visualization_code' (Engine A style) that represents the concept. This MUST be extremely lightweight CSS/Canvas (e.g., a simple spinning CSS shape).
 
 Engine C: The Precision Illustrator (2D Cross-sections, Anatomy, Diagrams, History)
 Current Model: ${MODELS.image.find(m => m.id === selected.image)?.name}
-Action: Output an ultra-detailed text prompt explicitly commanding accurate typographic labeling.
+Action: Output an ultra-detailed text prompt.
 
 Engine D: The Dynamic Animator (Simulations, Complex Reactions, Macro-scale Events)
 Current Model: ${MODELS.video.find(m => m.id === selected.video)?.name}
-Action: Output a highly descriptive cinematic video prompt to simulate the event.
-
-CRITICAL: For Engine B (3D) and Engine D (Video), you MUST also provide a 'loading_visualization_code' (Engine A style). This should be a simple, fast-loading CSS or Canvas animation that represents the core concept (e.g., a spinning atom, a flowing river, a pulsing cell). This allows the student to visualize the concept in real-time while the high-fidelity asset generates.
+Action: Output a highly descriptive cinematic video prompt.
+INSTANT PREVIEW: You MUST provide a 'loading_visualization_code' (Engine A style) that represents the concept. This MUST be extremely lightweight CSS/Canvas (e.g., a simple CSS pulse effect).
 
 When you speak, be warm, wise, friendly, and highly intelligent.`;
 
@@ -90,6 +90,7 @@ export default function TutoringInterface() {
     video: 'veo'
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [errorInfo, setErrorInfo] = useState<{ type: 'permission' | 'quota' | 'other', message: string } | null>(null);
 
   const [isCallActive, setIsCallActive] = useState(false);
   const isCallActiveRef = useRef(isCallActive);
@@ -189,6 +190,16 @@ export default function TutoringInterface() {
       WebSocket.prototype.send = originalSend; // Restore on unmount
     };
   }, []);
+
+  // Clear error info after 10 seconds
+  useEffect(() => {
+    if (errorInfo) {
+      const timer = setTimeout(() => {
+        setErrorInfo(null);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [errorInfo]);
 
   const handleStartCall = async () => {
     setCallError(null);
@@ -464,63 +475,101 @@ export default function TutoringInterface() {
                   });
 
                   // Generate real image in background (as preview for video or as final for image)
-                  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-                  if (apiKey) {
-                    const ai = new GoogleGenAI({ apiKey: apiKey as string });
-                    
-                    // Immediate Image Generation (Preview)
-                    ai.models.generateContent({
-                      model: 'gemini-2.5-flash-image',
-                      contents: args.visual_payload,
-                      config: {
-                        imageConfig: { aspectRatio: "16:9" }
-                      }
-                    }).then(response => {
-                      for (const part of response.candidates?.[0]?.content?.parts || []) {
-                        if (part.inlineData) {
-                          const imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, url: imageUrl } : prev);
-                          break;
+                  const currentAi = aiRef.current;
+                  if (currentAi) {
+                    const generateImage = (retryCount = 0) => {
+                      currentAi.models.generateContent({
+                        model: 'gemini-2.5-flash-image',
+                        contents: args.visual_payload,
+                        config: {
+                          imageConfig: { aspectRatio: "16:9" }
                         }
-                      }
-                    }).catch(err => console.error("Image generation failed:", err));
+                      }).then(response => {
+                        for (const part of response.candidates?.[0]?.content?.parts || []) {
+                          if (part.inlineData) {
+                            const imageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                            setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, url: imageUrl } : prev);
+                            break;
+                          }
+                        }
+                      }).catch(err => {
+                        console.error("Image generation failed:", err);
+                        const errStr = JSON.stringify(err).toLowerCase();
+                        if (errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota")) {
+                          if (retryCount < 2) {
+                            console.log(`Retrying image generation (attempt ${retryCount + 1})...`);
+                            setTimeout(() => generateImage(retryCount + 1), 2000);
+                          } else {
+                            setErrorInfo({ type: 'quota', message: "Image generation quota exceeded. Using placeholder visuals." });
+                          }
+                        } else if (errStr.includes("403") || errStr.includes("permission_denied")) {
+                          setErrorInfo({ type: 'permission', message: "Permission denied for image generation. Please re-select your API key." });
+                        }
+                      });
+                    };
+
+                    generateImage();
 
                     // If it's a video, start the long-running generation
                     if (args.ui_action === 'ENGINE_D_VIDEO') {
-                      ai.models.generateVideos({
-                        model: 'veo-3.1-fast-generate-preview',
-                        prompt: args.visual_payload,
-                        config: {
-                          numberOfVideos: 1,
-                          resolution: '720p',
-                          aspectRatio: '16:9'
-                        }
-                      }).then(async (operation) => {
-                        let op = operation;
-                        while (!op.done) {
-                          // Faster polling: 2 seconds instead of 5
-                          await new Promise(resolve => setTimeout(resolve, 2000));
-                          op = await ai.operations.getVideosOperation({ operation: op });
-                        }
-                        
-                        const downloadLink = op.response?.generatedVideos?.[0]?.video?.uri;
-                        if (downloadLink) {
-                          const videoResponse = await fetch(downloadLink, {
-                            method: 'GET',
-                            headers: { 'x-goog-api-key': apiKey as string },
-                          });
-                          const blob = await videoResponse.blob();
-                          const videoUrl = URL.createObjectURL(blob);
-                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { 
-                            ...prev, 
-                            videoUrl: videoUrl,
-                            isVideoGenerating: false 
-                          } : prev);
-                        }
-                      }).catch(err => {
-                        console.error("Video generation failed:", err);
-                        setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, isVideoGenerating: false } : prev);
-                      });
+                      const generateVideo = (retryCount = 0) => {
+                        currentAi.models.generateVideos({
+                          model: 'veo-3.1-fast-generate-preview',
+                          prompt: args.visual_payload,
+                          config: {
+                            numberOfVideos: 1,
+                            resolution: '720p',
+                            aspectRatio: '16:9'
+                          }
+                        }).then(async (operation) => {
+                          let op = operation;
+                          while (!op.done) {
+                            // Faster polling: 2 seconds instead of 5
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                            op = await currentAi.operations.getVideosOperation({ operation: op });
+                          }
+                          
+                          const downloadLink = op.response?.generatedVideos?.[0]?.video?.uri;
+                          if (downloadLink) {
+                            // Get API key from the instance if possible, or fallback to env
+                            const currentKey = (currentAi as any).apiKey || process.env.API_KEY || process.env.GEMINI_API_KEY;
+                            const videoResponse = await fetch(downloadLink, {
+                              method: 'GET',
+                              headers: { 'x-goog-api-key': currentKey as string },
+                            });
+                            const blob = await videoResponse.blob();
+                            const videoUrl = URL.createObjectURL(blob);
+                            setCurrentVisual(prev => prev.prompt === args.visual_payload ? { 
+                              ...prev, 
+                              videoUrl: videoUrl,
+                              isVideoGenerating: false 
+                            } : prev);
+                          }
+                        }).catch(err => {
+                          console.error("Video generation failed:", err);
+                          const errStr = JSON.stringify(err).toLowerCase();
+                          if (errStr.includes("429") || errStr.includes("resource_exhausted") || errStr.includes("quota")) {
+                            if (retryCount < 1) {
+                              console.log(`Retrying video generation (attempt ${retryCount + 1})...`);
+                              setTimeout(() => generateVideo(retryCount + 1), 3000);
+                            } else {
+                              setErrorInfo({ type: 'quota', message: "Video generation quota exceeded." });
+                            }
+                          } else if (errStr.includes("403") || errStr.includes("permission_denied") || errStr.includes("not found")) {
+                            setErrorInfo({ 
+                              type: 'permission', 
+                              message: "Permission denied for video generation. Veo requires an API key from a PAID Google Cloud project (see ai.google.dev/gemini-api/docs/billing). Please re-select your key." 
+                            });
+                            // Reset key selection state if it failed with 403
+                            if ((window as any).aistudio) {
+                              (window as any).aistudio.openSelectKey();
+                            }
+                          }
+                          setCurrentVisual(prev => prev.prompt === args.visual_payload ? { ...prev, isVideoGenerating: false } : prev);
+                        });
+                      };
+
+                      generateVideo();
                     }
                   } else {
                     console.error("API_KEY is missing. Please select an API key.");
@@ -528,7 +577,6 @@ export default function TutoringInterface() {
                       (window as any).aistudio.openSelectKey();
                     }
                   }
-
                 } else if (args.ui_action === 'ENGINE_A_CODE') {
                   visualType = 'code';
                   setCurrentVisual({
@@ -752,8 +800,9 @@ export default function TutoringInterface() {
                 
                 {currentVisual.type === 'code' && currentVisual.prompt && (
                   <motion.div 
-                    initial={{ opacity: 0, scale: 0.98 }}
-                    animate={{ opacity: 1, scale: 1 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.1 }}
                     className="w-full h-full bg-slate-950 relative"
                   >
                     <iframe
@@ -786,7 +835,16 @@ export default function TutoringInterface() {
                       />
                     ) : (
                       <>
-                        {currentVisual.url && (
+                        {currentVisual.loadingCode ? (
+                          <div className="absolute inset-0 z-10">
+                            <iframe
+                              srcDoc={currentVisual.loadingCode}
+                              className="w-full h-full border-none"
+                              title="Instant Simulation Preview"
+                              sandbox="allow-scripts allow-same-origin"
+                            />
+                          </div>
+                        ) : currentVisual.url && (
                           <motion.img 
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 0.4 }}
@@ -796,20 +854,10 @@ export default function TutoringInterface() {
                             referrerPolicy="no-referrer"
                           />
                         )}
-                        {currentVisual.loadingCode && (
-                          <div className="absolute inset-0 z-10 opacity-80">
-                            <iframe
-                              srcDoc={currentVisual.loadingCode}
-                              className="w-full h-full border-none"
-                              title="Real-time Simulation Preview"
-                              sandbox="allow-scripts allow-same-origin"
-                            />
-                          </div>
-                        )}
-                        <div className="text-center relative z-20 bg-slate-900/40 backdrop-blur-md p-6 rounded-3xl border border-white/10 shadow-2xl">
-                          <div className="w-10 h-10 mx-auto mb-3 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
-                          <h3 className="text-white font-bold text-base mb-0.5">Real-time Simulation...</h3>
-                          <p className="text-indigo-300 text-[10px] max-w-[180px] mx-auto">High-fidelity rendering in progress. Visualizing concept live.</p>
+                        <div className="text-center relative z-20 bg-slate-900/40 backdrop-blur-md p-4 rounded-2xl border border-white/10 shadow-2xl">
+                          <div className="w-8 h-8 mx-auto mb-2 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                          <h3 className="text-white font-bold text-sm">Instant Preview Active</h3>
+                          <p className="text-indigo-300 text-[9px]">High-fidelity rendering in background...</p>
                         </div>
                       </>
                     )}
@@ -818,7 +866,16 @@ export default function TutoringInterface() {
 
                 {currentVisual.type === '3d' && (
                   <div className="w-full h-full bg-slate-900 flex items-center justify-center relative overflow-hidden">
-                    {currentVisual.url && (
+                    {currentVisual.loadingCode ? (
+                      <div className="absolute inset-0 z-10">
+                        <iframe
+                          srcDoc={currentVisual.loadingCode}
+                          className="w-full h-full border-none"
+                          title="Instant Spatial Preview"
+                          sandbox="allow-scripts allow-same-origin"
+                        />
+                      </div>
+                    ) : currentVisual.url && (
                       <motion.img 
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 0.4 }}
@@ -828,20 +885,10 @@ export default function TutoringInterface() {
                         referrerPolicy="no-referrer"
                       />
                     )}
-                    {currentVisual.loadingCode && (
-                      <div className="absolute inset-0 z-10 opacity-80">
-                        <iframe
-                          srcDoc={currentVisual.loadingCode}
-                          className="w-full h-full border-none"
-                          title="Spatial Preview"
-                          sandbox="allow-scripts allow-same-origin"
-                        />
-                      </div>
-                    )}
-                    <div className="text-center relative z-20 bg-slate-900/40 backdrop-blur-md p-6 rounded-3xl border border-white/10 shadow-2xl">
-                      <div className="w-10 h-10 mx-auto mb-3 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                      <h3 className="text-white font-bold text-base mb-0.5">Architecting Space...</h3>
-                      <p className="text-emerald-300 text-[10px] max-w-[180px] mx-auto">Constructing spatial model. Real-time preview active.</p>
+                    <div className="text-center relative z-20 bg-slate-900/40 backdrop-blur-md p-4 rounded-2xl border border-white/10 shadow-2xl">
+                      <div className="w-8 h-8 mx-auto mb-2 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                      <h3 className="text-white font-bold text-sm">Spatial Preview Active</h3>
+                      <p className="text-emerald-300 text-[9px]">Constructing high-fidelity model...</p>
                     </div>
                   </div>
                 )}
@@ -855,33 +902,51 @@ export default function TutoringInterface() {
                   </div>
                 )}
 
-                {/* 3D Avatar Overlay (Simulated) */}
-                <div className="absolute bottom-24 right-8 w-48 h-48 md:w-64 md:h-64 rounded-full bg-gradient-to-t from-indigo-900/80 to-transparent backdrop-blur-sm border border-indigo-500/30 flex items-end justify-center overflow-hidden shadow-2xl shadow-indigo-900/50">
-                  <div className="w-3/4 h-3/4 bg-indigo-400/20 rounded-t-full relative">
-                    {/* Simulated Avatar Silhouette */}
-                    <div className="absolute inset-x-4 bottom-0 top-8 bg-indigo-300/40 rounded-t-full backdrop-blur-md border-t border-indigo-200/50"></div>
-                    <div className="absolute top-2 left-1/2 -translate-x-1/2 w-16 h-20 bg-indigo-200/50 rounded-full backdrop-blur-md border border-indigo-100/50"></div>
-                  </div>
-                  {/* Speaking Indicator */}
-                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1">
-                    {[1, 2, 3].map((i) => (
-                      <motion.div
-                        key={i}
-                        animate={{ height: ['4px', '12px', '4px'] }}
-                        transition={{ repeat: Infinity, duration: 0.8, delay: i * 0.2 }}
-                        className="w-1.5 bg-emerald-400 rounded-full"
-                      />
-                    ))}
-                  </div>
-                </div>
+                {/* 3D Avatar Overlay Removed */}
               </motion.div>
             )}
           </AnimatePresence>
         </div>
 
         {/* Voice Controls (Floating Bottom Center) */}
-        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-slate-900/80 backdrop-blur-xl p-3 rounded-full border border-slate-700/50 shadow-2xl">
-          {!isCallActive ? (
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-50">
+          <AnimatePresence>
+            {errorInfo && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 20 }}
+                className="bg-rose-500/90 backdrop-blur-md border border-rose-400/50 px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-4 max-w-md"
+              >
+                <div className="flex-1">
+                  <p className="text-white text-xs font-bold">{errorInfo.type === 'permission' ? 'Permission Required' : 'Quota Exceeded'}</p>
+                  <p className="text-rose-100 text-[10px]">{errorInfo.message}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {errorInfo.type === 'permission' && (
+                    <button
+                      onClick={() => {
+                        if ((window as any).aistudio) (window as any).aistudio.openSelectKey();
+                        setErrorInfo(null);
+                      }}
+                      className="px-3 py-1.5 bg-white text-rose-600 text-[10px] font-bold rounded-lg hover:bg-rose-50 transition-colors"
+                    >
+                      Select Key
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setErrorInfo(null)}
+                    className="p-1.5 hover:bg-white/10 rounded-lg text-white/70 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="flex items-center gap-4 bg-slate-900/80 backdrop-blur-xl p-3 rounded-full border border-slate-700/50 shadow-2xl">
+            {!isCallActive ? (
             <div className="flex items-center gap-2">
               <button
                 onClick={handleStartCall}
@@ -933,8 +998,9 @@ export default function TutoringInterface() {
           )}
         </div>
       </div>
+    </div>
 
-      <AnimatePresence>
+    <AnimatePresence>
         {isSettingsOpen && (
           <motion.div
             initial={{ opacity: 0 }}
