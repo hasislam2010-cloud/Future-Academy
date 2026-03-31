@@ -138,9 +138,14 @@ export default function TutoringInterface() {
         }
       }
 
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-      if (!apiKey || apiKey === "dummy_key") {
-        throw new Error("Gemini API Key is missing. Please select a valid API key in the settings (top right).");
+      // More resilient API key retrieval
+      const apiKey = process.env.API_KEY || 
+                     process.env.GEMINI_API_KEY || 
+                     (window as any)._env_?.GEMINI_API_KEY ||
+                     ""; 
+      
+      if (!apiKey && !(window as any).aistudio) {
+        throw new Error("Gemini API Key is missing. If you are hosting this on a custom domain, please ensure the GEMINI_API_KEY environment variable is set.");
       }
       
       aiRef.current = new GoogleGenAI({ apiKey: apiKey as string });
