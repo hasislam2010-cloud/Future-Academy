@@ -1,0 +1,7 @@
+{
+  "name": "Future Academy",
+  "description": "An elite, next-generation online STEM institution featuring Dr. Sam, an AI Social Science Tutor.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

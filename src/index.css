@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@keyframes ken-burns {
+  0% { transform: scale(1); }
+  100% { transform: scale(1.1); }
+}
+.animate-ken-burns {
+  animation: ken-burns 20s ease-out forwards;
+}
+.animate-spin-slow {
+  animation: spin 8s linear infinite;
+}
